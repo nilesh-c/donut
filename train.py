@@ -16,6 +16,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.profilers import AdvancedProfiler
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
 from pytorch_lightning.plugins import CheckpointIO
 from pytorch_lightning.utilities import rank_zero_only
@@ -52,13 +53,13 @@ def save_config_file(config, path):
 
 
 def train(config):
-    pl.utilities.seed.seed_everything(config.get("seed", 42), workers=True)
+    pl.seed_everything(config.get("seed", 42), workers=True)
 
     model_module = DonutModelPLModule(config)
     data_module = DonutDataPLModule(config)
 
     # add datasets to data_module
-    datasets = {"train": [], "validation": []}
+    datasets = {"train": [], "val": []}
     for i, dataset_name_or_path in enumerate(config.dataset_name_or_paths):
         task_name = os.path.basename(dataset_name_or_path)  # e.g., cord-v2, docvqa, rvlcdip, ...
         
@@ -73,7 +74,7 @@ def train(config):
         if task_name == "docvqa":
             model_module.model.decoder.add_special_tokens(["<yes/>", "<no/>"])
             
-        for split in ["train", "validation"]:
+        for split in ["train", "val"]:
             datasets[split].append(
                 DonutDataset(
                     dataset_name_or_path=dataset_name_or_path,
@@ -91,7 +92,7 @@ def train(config):
             # for docvqa task, i.e., {"question": {used as a prompt}, "answer": {prediction target}},
             # set prompt_end_token to "<s_answer>"
     data_module.train_datasets = datasets["train"]
-    data_module.val_datasets = datasets["validation"]
+    data_module.val_datasets = datasets["val"]
 
     logger = TensorBoardLogger(
         save_dir=config.result_path,
@@ -112,17 +113,19 @@ def train(config):
     )
 
     custom_ckpt = CustomCheckpointIO()
+    profiler = AdvancedProfiler(dirpath=".", filename="profiler.log")
     trainer = pl.Trainer(
-        resume_from_checkpoint=config.get("resume_from_checkpoint_path", None),
+        enable_checkpointing=config.get("enable_checkpointing", None),
         num_nodes=config.get("num_nodes", 1),
-        gpus=torch.cuda.device_count(),
-        strategy="ddp",
+        # gpus=torch.cuda.device_count(),
+        # strategy="ddp",
+        profiler=profiler,
+        overfit_batches=config.get("overfit_batches", 0.0),
         accelerator="gpu",
         plugins=custom_ckpt,
         max_epochs=config.max_epochs,
         max_steps=config.max_steps,
         val_check_interval=config.val_check_interval,
-        check_val_every_n_epoch=config.check_val_every_n_epoch,
         gradient_clip_val=config.gradient_clip_val,
         precision=16,
         num_sanity_val_steps=0,

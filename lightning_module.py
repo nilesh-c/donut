@@ -11,13 +11,14 @@ from pathlib import Path
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from nltk import edit_distance
+# from nltk import edit_distance
+from rapidfuzz.distance.Levenshtein import distance as edit_distance
 from pytorch_lightning.utilities import rank_zero_only
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torch.nn.utils.rnn import pad_sequence
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
-
+# from torchsummary import summary
 from donut import DonutConfig, DonutModel
 
 
@@ -44,6 +45,10 @@ class DonutModelPLModule(pl.LightningModule):
                     # encoder_layer=[2,2,14,2], decoder_layer=4, ...
                 )
             )
+            
+        # summary(self.model, (3, 224, 224))
+            
+        
 
     def training_step(self, batch, batch_idx):
         image_tensors, decoder_input_ids, decoder_labels = list(), list(), list()
@@ -80,13 +85,18 @@ class DonutModelPLModule(pl.LightningModule):
             scores.append(edit_distance(pred, answer) / max(len(pred), len(answer)))
 
             if self.config.get("verbose", False) and len(scores) == 1:
-                self.print(f"Prediction: {pred}")
-                self.print(f"    Answer: {answer}")
+                # self.print(f"Prediction: {pred}")
+                # self.print(f"    Answer: {answer}")
                 self.print(f" Normed ED: {scores[0]}")
 
+        self.validation_step_outputs.append(scores)
         return scores
+    
+    def on_validation_epoch_start(self) -> None:
+        self.validation_step_outputs = list()
 
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self):
+        validation_step_outputs = self.validation_step_outputs
         num_of_loaders = len(self.config.dataset_name_or_paths)
         if num_of_loaders == 1:
             validation_step_outputs = [validation_step_outputs]
@@ -169,6 +179,7 @@ class DonutDataPLModule(pl.LightningDataModule):
                     train_dataset,
                     batch_size=batch_size,
                     num_workers=self.config.num_workers,
+                    prefetch_factor=self.config.prefetch_factor,
                     pin_memory=True,
                     worker_init_fn=self.seed_worker,
                     generator=self.g,
@@ -184,6 +195,8 @@ class DonutDataPLModule(pl.LightningDataModule):
                 DataLoader(
                     val_dataset,
                     batch_size=batch_size,
+                    num_workers=self.config.num_workers,
+                    prefetch_factor=self.config.prefetch_factor,
                     pin_memory=True,
                     shuffle=False,
                 )
